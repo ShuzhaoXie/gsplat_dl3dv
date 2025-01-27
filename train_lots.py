@@ -6,10 +6,10 @@ data_dir = '/home/szxie/gsplat_dl3dv/DL3DV/960P-unzip'
 save_dir = '/home/szxie/gsplat_dl3dv/DL3DV/pretrained'
 
 
-def fun1(q, ds, name):
+def fun1(q, ds, name, data_dir, save_dir):
     cid = q.get()
     print(f'using {cid}, start training: {name}')
-    os.system(f'bash run.sh {ds} {name} {cid}')
+    os.system(f'bash run.sh {ds} {name} {cid} {data_dir} {save_dir}')
     q.put(cid)
 
 if __name__ == '__main__':
@@ -25,7 +25,7 @@ if __name__ == '__main__':
     
     # download required models
     print(f'using 0, start training: {untrained_names[0]}')
-    os.system(f'bash run.sh {ds} {untrained_names[0]} 0')
+    os.system(f'bash run.sh {ds} {untrained_names[0]} 0 {data_dir} {save_dir}')
     
     with Manager() as manager:
         q = manager.Queue()
@@ -38,7 +38,7 @@ if __name__ == '__main__':
         # print('here')
         for i, name in enumerate(untrained_names[1:]):
             # print(name)
-            pl.apply_async(func=fun1, args=(q, ds, name,))
+            pl.apply_async(func=fun1, args=(q, ds, name, data_dir, save_dir, ))
         
         pl.close()
         pl.join()
