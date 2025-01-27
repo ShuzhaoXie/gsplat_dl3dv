@@ -1,0 +1,3 @@
+[submodule "fused-ssim"]
+	path = fused-ssim
+	url = https://github.com/rahul-goel/fused-ssim.git
