@@ -15,7 +15,9 @@ import tqdm
 import tyro
 import viser
 import yaml
-from datasets.dl3dv import DL3DVDataset, Parser
+from datasets.common import Parser
+from datasets.dl3dv import DL3DVDataset, DL3DVParser
+from datasets.colmap import COLMAPDataset, COLMAPParser
 from datasets.traj import (
     generate_interpolated_path,
     generate_ellipse_path_z,
@@ -45,8 +47,11 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 @dataclass
 class Config:
+    
+    dataset_type: str = 'DL3DV' # ['DL3DV', 'COLMAP']
+    
     # Disable viewer
-    disable_viewer: bool = False
+    disable_viewer: bool = True
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
     ckpt: Optional[List[str]] = None
     # Name of compression strategy to use
@@ -152,6 +157,9 @@ class Config:
     # Shape of the bilateral grid (X, Y, W)
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
 
+    # Enable undistortion
+    use_undistortion: bool = True
+    
     # Enable depth loss. (experimental)
     depth_loss: bool = False
     # Weight for depth loss
@@ -163,7 +171,51 @@ class Config:
     tb_save_image: bool = False
 
     lpips_net: Literal["vgg", "alex"] = "alex"
+    
+    # Default 
+    cull_alpha_thresh: float = 0.002
+    """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
+    
+    densify_grad_thresh: float = 0.0002
+    """threshold of positional gradient norm for densifying gaussians"""
+    
+    densify_size_thresh: float = 0.01
+    """below this size, gaussians are *duplicated*, otherwise split"""
+    
+    split_screen_size: float = 0.05
+    """if a gaussian is more than this percent of screen space, split it"""
+    
+    cull_scale_thresh: float = 0.1
+    """threshold of scale for culling huge gaussians"""
+    
+    cull_screen_size: float = 0.15
+    """if a gaussian is more than this percent of screen space, cull it"""
+    
+    stop_screen_size_at: int = 0
+    """stop culling/splitting at this step WRT screen size of gaussians"""
+    
+    warmup_length: int = 500
+    """period of steps where refinement is turned off"""
+    
+    stop_split_at: int = 15000
+    """stop splitting at this step"""
+    
+    reset_alpha_every: int = 30
+    """Every this many refinement steps, reset the alpha"""
+    
+    refine_every: int = 100
+    """period of steps where gaussians are culled and densified"""
 
+    use_absgrad: bool = False
+    """Whether to use absgrad to densify gaussians, if False, will use grad rather than absgrad"""
+    
+    
+    # MCMC
+    max_gs_num: int = 1_000_000
+    """Maximum number of GSs. Default to 1_000_000."""
+    noise_lr: float = 5e5
+    """MCMC samping noise learning rate. Default to 5e5."""
+    
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -298,18 +350,36 @@ class Runner:
         # Tensorboard
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
 
+        
         # Load data: Training data should contain initial points and colors.
-        self.parser = Parser(
-            data_dir=cfg.data_dir,
-            factor=cfg.data_factor,
-            normalize=cfg.normalize_world_space,
-            test_every=cfg.test_every,
-        )
-        self.trainset = DL3DVDataset(
-            self.parser,
-            split="train"
-        )
-        self.valset = DL3DVDataset(self.parser, split="val")
+        if cfg.dataset_type == 'DL3DV':
+            self.parser = DL3DVParser(
+                data_dir=cfg.data_dir,
+                factor=cfg.data_factor,
+                normalize=cfg.normalize_world_space,
+                test_every=cfg.test_every,
+                use_undistortion=cfg.use_undistortion
+            )
+            print('config: use_undistortion:', cfg.use_undistortion)
+            self.trainset = DL3DVDataset(
+                self.parser,
+                split="train",
+                use_undistortion=cfg.use_undistortion
+            )
+            self.valset = DL3DVDataset(self.parser, split="val", use_undistortion=cfg.use_undistortion)
+        elif cfg.dataset_type == 'COLMAP':
+            self.parser = COLMAPParser(
+                data_dir=cfg.data_dir,
+                factor=cfg.data_factor,
+                normalize=cfg.normalize_world_space,
+                test_every=cfg.test_every,
+            )
+            self.trainset = COLMAPDataset(
+                self.parser,
+                split="train"
+            )
+            self.valset = COLMAPDataset(self.parser, split="val")
+            
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
@@ -940,8 +1010,13 @@ class Runner:
         )  # [N, 4, 4]
 
         camtoworlds_all = torch.from_numpy(camtoworlds_all).float().to(device)
-        K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
-        width, height = list(self.parser.imsize_dict.values())[0]
+        
+        if cfg.dataset_type == 'DL3DV':
+            K = torch.from_numpy(self.parser.K).float().to(device)
+            width, height = self.parser.imsize
+        elif cfg.dataset_type == 'COLMAP':
+            K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
+            width, height = list(self.parser.imsize_dict.values())[0]
 
         # save to video
         video_dir = f"{cfg.result_dir}/videos"
@@ -1075,8 +1150,42 @@ if __name__ == "__main__":
         ),
     }
     cfg = tyro.extras.overridable_config_cli(configs)
+    
+    
+    if isinstance(cfg.strategy, DefaultStrategy):
+        cfg.strategy = DefaultStrategy(
+            prune_opa=cfg.cull_alpha_thresh,
+            grow_grad2d=cfg.densify_grad_thresh,
+            grow_scale3d=cfg.densify_size_thresh,
+            grow_scale2d=cfg.split_screen_size,
+            prune_scale3d=cfg.cull_scale_thresh,
+            prune_scale2d=cfg.cull_screen_size,
+            refine_scale2d_stop_iter=cfg.stop_screen_size_at,
+            refine_start_iter=cfg.warmup_length,
+            refine_stop_iter=cfg.stop_split_at,
+            reset_every=cfg.reset_alpha_every * cfg.refine_every,
+            refine_every=cfg.refine_every,
+            # pause_refine_after_reset=self.num_train_data + cfg.refine_every, TODO: 
+            absgrad=cfg.use_absgrad,
+            revised_opacity=False,
+            verbose=True,
+        )
+    elif isinstance(cfg.strategy, MCMCStrategy):
+        cfg.strategy = MCMCStrategy(
+            cap_max=cfg.max_gs_num,
+            noise_lr=cfg.noise_lr,
+            refine_start_iter=cfg.warmup_length,
+            refine_stop_iter=cfg.stop_split_at,
+            refine_every=cfg.refine_every,
+            min_opacity=cfg.cull_alpha_thresh,
+            verbose=False,
+        )
+    else:
+        assert_never(cfg.strategy)
+    
     cfg.adjust_steps(cfg.steps_scaler)
-
+    
+    print('Reset Strategy')
     # try import extra dependencies
     if cfg.compression == "png":
         try:

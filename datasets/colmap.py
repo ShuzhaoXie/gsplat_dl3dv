@@ -8,6 +8,7 @@ import imageio.v2 as imageio
 import numpy as np
 import torch
 from pycolmap import SceneManager
+from .common import Parser
 
 from .normalize import (
     align_principle_axes,
@@ -26,7 +27,7 @@ def _get_rel_paths(path_dir: str) -> List[str]:
     return paths
 
 
-class Parser:
+class COLMAPParser(Parser):
     """COLMAP parser."""
 
     def __init__(
@@ -36,11 +37,13 @@ class Parser:
         normalize: bool = False,
         test_every: int = 8,
     ):
+        super().__init__()
+        
         self.data_dir = data_dir
         self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
-
+        
         colmap_dir = os.path.join(data_dir, "sparse/0/")
         if not os.path.exists(colmap_dir):
             colmap_dir = os.path.join(data_dir, "sparse")
@@ -148,23 +151,24 @@ class Parser:
         if os.path.exists(posefile):
             self.bounds = np.load(posefile)[:, -2:]
 
+        print(factor)
         # Load images.
         if factor > 1 and not self.extconf["no_factor_suffix"]:
             image_dir_suffix = f"_{factor}"
         else:
             image_dir_suffix = ""
-        colmap_image_dir = os.path.join(data_dir, "images")
+        # colmap_image_dir = os.path.join(data_dir, "images")
         image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
-        for d in [image_dir, colmap_image_dir]:
+        for d in [image_dir]:
             if not os.path.exists(d):
                 raise ValueError(f"Image folder {d} does not exist.")
 
         # Downsampled images may have different names vs images used for COLMAP,
         # so we need to map between the two sorted lists of files.
-        colmap_files = sorted(_get_rel_paths(colmap_image_dir))
+        # colmap_files = sorted(_get_rel_paths(colmap_image_dir))
         image_files = sorted(_get_rel_paths(image_dir))
-        colmap_to_image = dict(zip(colmap_files, image_files))
-        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+        # colmap_to_image = dict(zip(colmap_files, image_files))
+        image_paths = [os.path.join(image_dir, f) for f in image_names]
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
@@ -299,7 +303,7 @@ class Parser:
         self.scene_scale = np.max(dists)
 
 
-class Dataset:
+class COLMAPDataset:
     """A simple dataset class."""
 
     def __init__(

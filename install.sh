@@ -6,3 +6,5 @@ pip install --upgrade imageio-ffmpeg
 pip3 install nerfview==0.0.2
 git clone https://github.com/rahul-goel/fused-ssim
 pip install fused-ssim/
+pip install git+https://github.com/rmbrualla/pycolmap@cc7ea4b7301720ac29287dbe450952511b32125e
+

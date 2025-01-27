@@ -5,26 +5,37 @@ from typing_extensions import assert_never
 
 from PIL import Image
 import numpy as np
+from .common import Parser
 import imageio.v2 as imageio
 import torch
 import cv2
 
+from .normalize import (
+    align_principle_axes,
+    similarity_from_cameras,
+    transform_cameras,
+    transform_points,
+)
+
 # check: https://docs.nerf.studio/quickstart/data_conventions.html
 
-class Parser:
+class DL3DVParser(Parser):
     def __init__(
         self,
         data_dir: str,
         factor: int = 4,
         normalize: bool = False,
         test_every: int = 8,
+        use_undistortion: bool = True
     ):
+        super().__init__()
+
         self.data_dir = data_dir
         self.factor = factor 
         self.image_paths = []
         # self.camera_ids = []
         self.image_ids = []
-        # w2c_mats = []
+        w2c_mats = []
         c2w_mats = []
         self.normalize = normalize
         self.test_every = test_every
@@ -68,9 +79,8 @@ class Parser:
             self.camtype = camtype
             
             self.imsize = (contents["w"] // factor, contents["h"] // factor)
-            
-            
             width, height = self.imsize
+            
             if camtype == "perspective":
                 K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
                     K, params, (width, height), 0
@@ -122,11 +132,14 @@ class Parser:
             self.mapy = mapy
             self.K = K_undist
             self.roi_undist = roi_undist
+            self.imsize = (roi_undist[2], roi_undist[3])
             
             frames = contents["frames"]
             for idx, frame in enumerate(frames):
                 # already ranked, no need
                 matrix = np.array(frame["transform_matrix"]) # opencv model?
+                # w2c_mats.append(matrix)
+                # print(matrix) w2c or c2w?
                 # w2c_mats.append(matrix)
                 c2w_mats.append(matrix)
                 
@@ -135,15 +148,32 @@ class Parser:
                 image_path = os.path.join(image_dir, image_name)
                 self.image_paths.append(image_path)
                 self.image_ids.append(frame["colmap_im_id"])
+            
+            # w2c_mats = np.stack(w2c_mats, axis=0)
+            # self.camtoworlds = np.linalg.inv(w2c_mats)
+            camtoworlds = np.stack(c2w_mats, axis=0)
+        camtoworlds = np.concatenate([camtoworlds[:, 1:2, :], camtoworlds[:, 0:1, :], camtoworlds[:, 2:]], axis=1)
+        camtoworlds[:, 0, :3] = -camtoworlds[:, 0, :3]
+        camtoworlds[:, 1, :3] = -camtoworlds[:, 1, :3]
+        camtoworlds[:, :3, 0] = -camtoworlds[:, :3, 0]
+        camtoworlds[:, 2, 3] = -camtoworlds[:,2, 3]
+        self.camtoworlds = camtoworlds
                 
-            self.camtoworlds = np.stack(c2w_mats, axis=0)
-
+        
+        if normalize:
+            T1 = similarity_from_cameras(self.camtoworlds)
+            self.camtoworlds = transform_cameras(T1, self.camtoworlds)
+            transform = T1
+        else:
+            transform = np.eye(4)    
+        self.transform = transform
+        
         camera_locations = self.camtoworlds[:, :3, 3]
         scene_center = np.mean(camera_locations, axis=0)
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
         self.scene_scale = np.max(dists)
-            # Convert extrinsics to camera-to-world.
-            # self.camtoworlds = np.linalg.inv(w2c_mats)
+        # Convert extrinsics to camera-to-world.
+        # self.camtoworlds = np.linalg.inv(w2c_mats)
             
 
     
@@ -152,7 +182,7 @@ class DL3DVDataset:
         self,
         parser: Parser,
         split: str = "train",
-        use_undistort: bool = True
+        use_undistortion: bool = True
     ):
         self.parser = parser
         self.split = split 
@@ -161,7 +191,7 @@ class DL3DVDataset:
             self.indices = indices[indices % self.parser.test_every != 0]
         else:
             self.indices = indices[indices % self.parser.test_every == 0]
-        self.use_undistort = use_undistort
+        self.use_undistort = use_undistortion
 
     
     def __len__(self):
@@ -189,7 +219,7 @@ class DL3DVDataset:
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworld).float(),
             "image": torch.from_numpy(image).float(),
-            "index_ds": item,  # the index of the image in the dataset
+            "image_id": item,  # the index of the image in the dataset
         }
         
         return data
