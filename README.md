@@ -5,21 +5,26 @@ This reposity provides the code to
 
 Note that using [NeRFStudio](https://github.com/nerfstudio-project/nerfstudio) can be a better choice.
 ## Install
+* Clone the reposity
+    ```bash
+    git clone https://github.com/ShuzhaoXie/gsplat_dl3dv.git --recursive
+    ```
 
-```bash 
-conda create -n gdl python=3.10
-conda activate gdl
-pip3 install ninja numpy jaxtyping rich
-pip3 install torch==2.1.0+cu121 torchvision==0.16.0+cu121 torchaudio==2.1.0+cu121 --index-url https://download.pytorch.org/whl/cu121
-pip3 install gsplat --index-url https://docs.gsplat.studio/whl/pt21cu121
-pip3 install imageio opencv-python pyyaml scikit-learn matplotlib tensorly tensorboard torchmetrics
-pip install --upgrade imageio-ffmpeg
-pip3 install nerfview==0.0.2
-# git clone https://github.com/rahul-goel/fused-ssim
-pip install fused-ssim/
-pip install git+https://github.com/rmbrualla/pycolmap@cc7ea4b7301720ac29287dbe450952511b32125e
-pip install numpy==1.26.4
-```
+* Install, require CUDA 12.1+
+    ```bash 
+    conda create -n gdl python=3.10
+    conda activate gdl
+    pip3 install ninja numpy jaxtyping rich
+    pip3 install torch==2.1.0+cu121 torchvision==0.16.0+cu121 torchaudio==2.1.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+    pip3 install gsplat --index-url https://docs.gsplat.studio/whl/pt21cu121
+    pip3 install imageio opencv-python pyyaml scikit-learn matplotlib tensorly tensorboard torchmetrics
+    pip install --upgrade imageio-ffmpeg
+    pip3 install nerfview==0.0.2
+    # git clone https://github.com/rahul-goel/fused-ssim
+    pip install fused-ssim/
+    pip install git+https://github.com/rmbrualla/pycolmap@cc7ea4b7301720ac29287dbe450952511b32125e
+    pip install numpy==1.26.4
+    ```
 
 ## Download DL3DV (960P)
 1. Prepare you `HF_TOKEN`.
@@ -35,17 +40,23 @@ pip install numpy==1.26.4
 
 
 ## Run the trainer
-Check `run.sh`.
-```bash
-#!/bin/bash
+* Train a scene.
+    Check `run.sh`.
+    ```bash
+    #!/bin/bash
 
-split=$1
-scene=$2
-time=$(date "+%Y-%m-%d_%H:%M:%S")
+    split=$1
+    scene=$2
+    time=$(date "+%Y-%m-%d_%H:%M:%S")
 
-CUDA_VISIBLE_DEVICES=0 python simple_trainer.py default \
-    --data_dir 960P-unzip/$split/$scene --data_factor 4 \
-    --result_dir ./results/$split/$scene/$time \
-    --dataset_type DL3DV \
-    --init_type random
-```
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py default \
+        --data_dir 960P-unzip/$split/$scene --data_factor 4 \
+        --result_dir ./results/$split/$scene/$time \
+        --dataset_type DL3DV \
+        --init_type random
+    ```
+
+* Train multiple scenes.
+    ```bash
+    python train_lots.py
+    ```
